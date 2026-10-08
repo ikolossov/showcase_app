@@ -30,9 +30,9 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Тесты сервера
         run: docker run --rm -v "$PWD/server:/src" -w /src golang:1.27.1-alpine go test -count=1 ./...
       - name: Тесты клиента
@@ -40,14 +40,14 @@ jobs:
 
   linux-windows:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Версия
         run: v="${{ inputs.version || github.ref_name }}"; echo "VERSION=${v#v}" >> "$GITHUB_ENV"
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Сборка в Docker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: client
           build-args: |
@@ -57,19 +57,19 @@ jobs:
           outputs: type=local,dest=dist
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-windows
           path: dist/showcase-*
 
   macos:
     needs: test
-    runs-on: macos-14 # Apple Silicon; x86_64 собирается кросс-компиляцией на нём же
+    runs-on: macos-15 # Apple Silicon; x86_64 собирается кросс-компиляцией на нём же
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Версия
         run: v="${{ inputs.version || github.ref_name }}"; echo "VERSION=${v#v}" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -101,7 +101,7 @@ jobs:
         env:
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY || '-' }}
         run: ./scripts/build-macos.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos
           path: dist/showcase-*
@@ -109,11 +109,11 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [linux-windows, macos]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
