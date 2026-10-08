@@ -128,9 +128,12 @@ impl Api {
         json(resp).map(Some)
     }
 
-    /// Потоковая загрузка (без буферизации всего файла в памяти).
+    /// Потоковая загрузка (без буферизации всего файла в памяти). URL может быть
+    /// абсолютным (GitHub Releases) — туда идём без своих заголовков с AppID.
     pub fn download(&self, url: &str) -> Result<impl Read, Error> {
-        let resp = self.get(url).config().timeout_global(Some(Duration::from_secs(600))).build().call()?;
+        let foreign = url.starts_with("http") && !url.starts_with(&format!("{}/", self.base));
+        let req = if foreign { self.agent.get(url) } else { self.get(url) };
+        let resp = req.config().timeout_global(Some(Duration::from_secs(600))).build().call()?;
         if !resp.status().is_success() {
             return Err(Error::Other(format!("download: HTTP {}", resp.status())));
         }

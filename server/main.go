@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -67,6 +68,8 @@ type release struct {
 	File    string `json:"file"`
 	Size    int64  `json:"size"`
 	SHA256  string `json:"sha256"`
+	URL     string `json:"url,omitempty"` // абсолютная ссылка (GitHub); пусто — /download/<File>
+	Source  string `json:"source"`        // local | github
 	modTime time.Time
 }
 
@@ -74,6 +77,7 @@ type server struct {
 	accessTTL   time.Duration
 	refreshTTL  time.Duration
 	releasesDir string
+	github      *githubSource // nil — только локальный каталог
 
 	mu       sync.Mutex
 	devices  map[string]*device
@@ -90,6 +94,8 @@ func main() {
 	releases := flag.String("releases", envOr("RELEASES_DIR", "./releases"), "каталог с бинарниками релизов")
 	accessTTL := flag.Duration("access-ttl", envDur("ACCESS_TTL", 15*time.Minute), "время жизни access-токена")
 	refreshTTL := flag.Duration("refresh-ttl", envDur("REFRESH_TTL", 30*24*time.Hour), "время жизни refresh-токена")
+	ghRepo := flag.String("github-repo", os.Getenv("GITHUB_REPO"), "owner/name: брать релизы ещё и из GitHub Releases")
+	ghPoll := flag.Duration("github-poll", envDur("GITHUB_POLL", 5*time.Minute), "как часто перечитывать GitHub Releases")
 	flag.Parse()
 
 	s := &server{
@@ -101,6 +107,10 @@ func main() {
 		refresh:     map[string]token{},
 		sumCache:    map[string]release{},
 		price:       649_990,
+	}
+	if *ghRepo != "" {
+		s.github = newGitHubSource(*ghRepo, os.Getenv("GITHUB_TOKEN"))
+		go s.github.run(context.Background(), *ghPoll)
 	}
 
 	mux := http.NewServeMux()
@@ -231,7 +241,7 @@ func (s *server) handleProduct(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	cur := q.Get("version")
-	rels := s.scanReleases()
+	rels := s.releases()
 	var best *release
 	for i := range rels {
 		rel := &rels[i]
@@ -247,9 +257,13 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.logEvent(r.Header.Get("X-App-ID"), fmt.Sprintf("предложено обновление %s → %s", cur, best.Version))
 	s.mu.Unlock()
+	url := best.URL
+	if url == "" {
+		url = "/download/" + best.File
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version": best.Version,
-		"url":     "/download/" + best.File,
+		"url":     url,
 		"sha256":  best.SHA256,
 		"size":    best.Size,
 	})
@@ -297,7 +311,7 @@ func (s *server) approve(appID, name string) error {
 // ---------- админка ----------
 
 func (s *server) handleAdminState(w http.ResponseWriter, r *http.Request) {
-	rels := s.scanReleases()
+	rels := s.releases()
 	s.mu.Lock()
 	devs := make([]device, 0, len(s.devices))
 	for _, d := range s.devices {
@@ -307,10 +321,14 @@ func (s *server) handleAdminState(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	slices.SortFunc(devs, func(a, b device) int { return b.FirstSeen.Compare(a.FirstSeen) })
 	slices.Reverse(evs)
-	writeJSON(w, http.StatusOK, map[string]any{
+	state := map[string]any{
 		"devices": devs, "events": evs, "releases": rels,
 		"access_ttl": s.accessTTL.String(), "now": time.Now(),
-	})
+	}
+	if s.github != nil {
+		state["github"] = s.github.status()
+	}
+	writeJSON(w, http.StatusOK, state)
 }
 
 func (s *server) handleAdminApprove(w http.ResponseWriter, r *http.Request) {
@@ -394,6 +412,17 @@ func (s *server) logEvent(appID, text string) {
 	}
 }
 
+// releases — все известные релизы: локальный каталог + GitHub Releases.
+// При одинаковой версии под одну платформу выигрывает локальный файл.
+func (s *server) releases() []release {
+	rels := s.scanReleases()
+	if s.github != nil {
+		rels = append(rels, s.github.list()...)
+	}
+	slices.SortStableFunc(rels, func(a, b release) int { return cmpVersion(b.Version, a.Version) })
+	return rels
+}
+
 var releaseRe = regexp.MustCompile(`^showcase-(\d+\.\d+\.\d+)-([a-z]+)-([a-z0-9_]+)(\.exe)?$`)
 
 // scanReleases читает каталог релизов. Имя файла: showcase-<версия>-<os>-<arch>[.exe].
@@ -415,7 +444,7 @@ func (s *server) scanReleases() []release {
 			if err != nil {
 				continue
 			}
-			rel = release{Version: m[1], OS: m[2], Arch: m[3], File: e.Name(), Size: info.Size(), SHA256: sum, modTime: info.ModTime()}
+			rel = release{Version: m[1], OS: m[2], Arch: m[3], File: e.Name(), Size: info.Size(), SHA256: sum, Source: "local", modTime: info.ModTime()}
 			s.mu.Lock()
 			s.sumCache[e.Name()] = rel
 			s.mu.Unlock()

@@ -15,6 +15,9 @@ pub struct Data {
     pub access_token: Option<String>,
     #[serde(default)]
     pub refresh_token: Option<String>,
+    /// Адрес сервера, закреплённый при первом запуске (см. main::resolve_server).
+    #[serde(default)]
+    pub server: Option<String>,
 }
 
 pub struct Store {

@@ -8,6 +8,10 @@ services:
       ACCESS_TTL: ${ACCESS_TTL:-2m}
       RELEASES_DIR: /releases
       TZ: ${TZ:-Asia/Almaty}
+      # Релизы из GitHub Releases: сервер выбирает версию, клиент качает файл с GitHub.
+      # Пустое значение — только локальный каталог releases/.
+      GITHUB_REPO: ${GITHUB_REPO-ikolossov/showcase_app}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     volumes:
       # Положить файл showcase-<версия>-<os>-<arch>[.exe] сюда = выпустить обновление.
       - ./releases:/releases:ro

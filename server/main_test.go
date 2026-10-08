@@ -167,3 +167,55 @@ func TestCmpVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateFromGitHubReleases(t *testing.T) {
+	sum := strings.Repeat("ab", 32)
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/acme/showcase/releases" {
+			http.NotFound(w, r)
+			return
+		}
+		asset := func(name, digest string) map[string]any {
+			return map[string]any{"name": name, "size": 100, "digest": digest, "browser_download_url": "https://github.example/dl/" + name}
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"draft": true, "assets": []any{asset("showcase-9.0.0-linux-x86_64", "sha256:"+sum)}},
+			{"prerelease": true, "assets": []any{asset("showcase-8.0.0-linux-x86_64", "sha256:"+sum)}},
+			{"assets": []any{
+				asset("showcase-2.0.0-linux-x86_64", "sha256:"+sum),
+				asset("showcase-2.0.0-macos-aarch64", ""), // без digest — пропускаем
+				asset("SHA256SUMS", "sha256:"+sum),
+			}},
+			{"assets": []any{asset("showcase-1.5.0-macos-aarch64", "sha256:"+sum)}},
+		})
+	}))
+	defer gh.Close()
+
+	s, ts := newTestServer(t)
+	s.github = newGitHubSource("acme/showcase", "")
+	s.github.api = gh.URL
+	rels, err := s.github.fetch(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.github.rels = rels
+	if len(rels) != 2 {
+		t.Fatalf("ждали 2 файла (без draft, prerelease, без digest и SHA256SUMS), получили %d: %+v", len(rels), rels)
+	}
+
+	code, upd := do(t, "GET", ts.URL+"/api/v1/update?os=linux&arch=x86_64&version=1.0.0", "", "")
+	if code != 200 || upd["version"] != "2.0.0" || upd["url"] != "https://github.example/dl/showcase-2.0.0-linux-x86_64" || upd["sha256"] != sum {
+		t.Fatalf("update linux из GitHub: %d %v", code, upd)
+	}
+	if code, upd := do(t, "GET", ts.URL+"/api/v1/update?os=macos&arch=aarch64&version=1.0.0", "", ""); code != 200 || upd["version"] != "1.5.0" {
+		t.Fatalf("macos: файл 2.0.0 без digest должен быть пропущен: %d %v", code, upd)
+	}
+
+	// Локальный файл той же версии важнее GitHub — отдаётся с нашего сервера.
+	if err := os.WriteFile(filepath.Join(s.releasesDir, "showcase-2.0.0-linux-x86_64"), []byte("local"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if code, upd := do(t, "GET", ts.URL+"/api/v1/update?os=linux&arch=x86_64&version=1.0.0", "", ""); code != 200 || upd["url"] != "/download/showcase-2.0.0-linux-x86_64" {
+		t.Fatalf("локальный приоритет: %d %v", code, upd)
+	}
+}

@@ -35,15 +35,12 @@ pub struct Config {
 }
 
 impl Config {
-    fn from_env() -> Self {
+    fn from_env(server: String) -> Self {
         let secs = |key: &str, def: u64| {
             Duration::from_secs(std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(def))
         };
         Self {
-            server: std::env::var("SHOWCASE_SERVER")
-                .unwrap_or_else(|_| DEFAULT_SERVER.into())
-                .trim_end_matches('/')
-                .to_string(),
+            server,
             product_every: secs("SHOWCASE_PRODUCT_INTERVAL", 600),
             update_every: secs("SHOWCASE_UPDATE_INTERVAL", 600),
             login_every: secs("SHOWCASE_LOGIN_INTERVAL", 2),
@@ -51,11 +48,30 @@ impl Config {
     }
 }
 
+/// Адрес сервера: SHOWCASE_SERVER > сохранённый при первом запуске > вшитый при сборке.
+/// Закрепляем его в state.json, чтобы обновление, собранное с другим
+/// SHOWCASE_DEFAULT_SERVER (например, в CI), не переключило устройство на чужой сервер.
+fn resolve_server(store: &mut store::Store) -> String {
+    let server = std::env::var("SHOWCASE_SERVER")
+        .ok()
+        .or_else(|| store.data.server.clone())
+        .unwrap_or_else(|| DEFAULT_SERVER.into())
+        .trim_end_matches('/')
+        .to_string();
+    if store.data.server.as_deref() != Some(server.as_str()) {
+        store.data.server = Some(server.clone());
+        if let Err(e) = store.save() {
+            log!("не удалось сохранить адрес сервера: {e}");
+        }
+    }
+    server
+}
+
 fn main() -> eframe::Result {
-    let cfg = Config::from_env();
     // Путь к бинарнику запоминаем до возможной подмены файла обновлением.
     let exe = std::env::current_exe().expect("current_exe");
-    let store = store::Store::load_or_init().expect("не удалось открыть хранилище состояния");
+    let mut store = store::Store::load_or_init().expect("не удалось открыть хранилище состояния");
+    let cfg = Config::from_env(resolve_server(&mut store));
     log!("server={} app_id={} data={}", cfg.server, store.data.app_id, store.path.display());
 
     let api = api::Api::new(&cfg.server, &store.data.app_id);
