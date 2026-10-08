@@ -1,0 +1,4 @@
+# Одна версия компилятора для Docker, macOS и CI (совпадает с образом в client/Dockerfile).
+[toolchain]
+channel = "1.99.0"
+profile = "minimal"

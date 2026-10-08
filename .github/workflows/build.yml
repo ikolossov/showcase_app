@@ -1,0 +1,125 @@
+# Сборка клиента под все платформы.
+#   linux + windows — в Docker (client/Dockerfile), как и локально через `make client`;
+#   macos           — на раннере macOS (SDK Xcode есть только там), scripts/build-macos.sh.
+# Тег vX.Y.Z → GitHub Release с бинарниками; файлы из релиза кладутся в каталог
+# releases/ сервера обновлений как есть.
+#
+# Настройки репозитория (необязательно):
+#   vars.SHOWCASE_SERVER            адрес сервера, зашиваемый в клиент
+#   vars.UPX                        "1" — сжимать linux/windows бинарники UPX
+#   secrets.MACOS_CERT_P12          base64 сертификата Developer ID Application (.p12)
+#   secrets.MACOS_CERT_PASSWORD     пароль к .p12
+#   secrets.MACOS_SIGN_IDENTITY     "Developer ID Application: Company (TEAMID)"
+#   secrets.APPLE_ID / APPLE_TEAM_ID / APPLE_APP_PASSWORD — для нотаризации
+# Без секретов macOS-бинарники подписываются ad-hoc.
+name: build
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия (1.2.3)"
+        required: true
+        default: "0.0.0"
+
+env:
+  SERVER: ${{ vars.SHOWCASE_SERVER || 'http://localhost:8780' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Тесты сервера
+        run: docker run --rm -v "$PWD/server:/src" -w /src golang:1.27.1-alpine go test -count=1 ./...
+      - name: Тесты клиента
+        run: docker run --rm -v "$PWD/client:/src" -w /src rust:1.99.0-slim-bookworm cargo test --locked
+
+  linux-windows:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Версия
+        run: v="${{ inputs.version || github.ref_name }}"; echo "VERSION=${v#v}" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+      - name: Сборка в Docker
+        uses: docker/build-push-action@v6
+        with:
+          context: client
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            DEFAULT_SERVER=${{ env.SERVER }}
+            COMPRESS=${{ vars.UPX || '0' }}
+          outputs: type=local,dest=dist
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-windows
+          path: dist/showcase-*
+
+  macos:
+    needs: test
+    runs-on: macos-14 # Apple Silicon; x86_64 собирается кросс-компиляцией на нём же
+    steps:
+      - uses: actions/checkout@v4
+      - name: Версия
+        run: v="${{ inputs.version || github.ref_name }}"; echo "VERSION=${v#v}" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            client/target
+          key: macos-${{ hashFiles('client/Cargo.lock', 'client/rust-toolchain.toml') }}
+      - name: Сертификат подписи
+        if: ${{ env.HAS_CERT == 'true' }}
+        env:
+          HAS_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
+          P12: ${{ secrets.MACOS_CERT_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          echo "$P12" | base64 --decode > cert.p12
+          security create-keychain -p ci build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p ci build.keychain
+          security import cert.p12 -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+          rm cert.p12
+      - name: Профиль нотаризации
+        if: ${{ env.HAS_NOTARY == 'true' }}
+        env:
+          HAS_NOTARY: ${{ secrets.APPLE_ID != '' }}
+        run: |
+          xcrun notarytool store-credentials ci --apple-id "${{ secrets.APPLE_ID }}" \
+            --team-id "${{ secrets.APPLE_TEAM_ID }}" --password "${{ secrets.APPLE_APP_PASSWORD }}"
+          echo "NOTARY_PROFILE=ci" >> "$GITHUB_ENV"
+      - name: Сборка
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY || '-' }}
+        run: ./scripts/build-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/showcase-*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux-windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: SHA-256
+        run: cd dist && sha256sum showcase-* > SHA256SUMS
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/* --repo "${{ github.repository }}" --generate-notes

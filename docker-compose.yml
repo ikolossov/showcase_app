@@ -1,0 +1,14 @@
+services:
+  server:
+    build: ./server
+    ports:
+      - "${PORT:-8780}:8080"
+    environment:
+      # Короткий TTL access-токена, чтобы на стенде было видно обновление по refresh.
+      ACCESS_TTL: ${ACCESS_TTL:-2m}
+      RELEASES_DIR: /releases
+      TZ: ${TZ:-Asia/Almaty}
+    volumes:
+      # Положить файл showcase-<версия>-<os>-<arch>[.exe] сюда = выпустить обновление.
+      - ./releases:/releases:ro
+    restart: unless-stopped

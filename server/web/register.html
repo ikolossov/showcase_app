@@ -1,0 +1,41 @@
+{{define "register.html"}}<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Регистрация устройства</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --fg:#1b1f24; --muted:#667085; --accent:#1a7f5a; --border:#e3e6ea; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1a1e24; --fg:#e8eaed; --muted:#9aa3ad; --accent:#3cc48e; --border:#2b3038; } }
+  body { margin:0; font:16px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:440px; margin:0 auto; padding:24px 16px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:20px; }
+  h1 { font-size:22px; margin:0 0 12px; }
+  code { font-size:13px; word-break:break-all; color:var(--muted); }
+  label { display:block; margin:16px 0 6px; color:var(--muted); font-size:14px; }
+  input { width:100%; box-sizing:border-box; padding:12px; border-radius:10px; border:1px solid var(--border); background:var(--bg); color:var(--fg); font-size:16px; }
+  button { margin-top:16px; width:100%; padding:14px; border:0; border-radius:10px; background:var(--accent); color:#fff; font-size:16px; font-weight:600; }
+  .ok { color:var(--accent); font-weight:600; font-size:18px; }
+  .muted { color:var(--muted); font-size:14px; }
+</style>
+</head>
+<body><main><div class="card">
+  <h1>Регистрация устройства</h1>
+  <div class="muted">AppID</div>
+  <code>{{.AppID}}</code>
+  {{if not .Known}}
+    <p>Устройство с таким AppID ещё не обращалось к серверу. Запустите приложение — оно покажет QR-код.</p>
+  {{else if eq .Device.Status "approved"}}
+    <p class="ok">✓ Устройство «{{.Device.Name}}» привязано</p>
+    <p class="muted">Приложение получит токены при следующем опросе /login (раз в 2 секунды) и покажет товар.</p>
+  {{else}}
+    <p class="muted">Платформа: {{or .Device.Platform "—"}}, версия: {{or .Device.Version "—"}}</p>
+    <form method="post" action="/register">
+      <input type="hidden" name="app_id" value="{{.AppID}}">
+      <label for="name">Название устройства</label>
+      <input id="name" name="name" placeholder="Например, «Витрина, 2 этаж»" autocomplete="off">
+      <button type="submit">Привязать устройство</button>
+    </form>
+  {{end}}
+</div></main></body>
+</html>{{end}}

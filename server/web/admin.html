@@ -1,0 +1,70 @@
+{{define "admin.html"}}<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Showcase — стенд</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --fg:#1b1f24; --muted:#667085; --accent:#1a7f5a; --warn:#b54708; --danger:#c0362c; --border:#e3e6ea; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1a1e24; --fg:#e8eaed; --muted:#9aa3ad; --accent:#3cc48e; --warn:#f0a35c; --danger:#ff6b5f; --border:#2b3038; } }
+  body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:1100px; margin:0 auto; padding:20px 16px; display:grid; gap:16px; }
+  h1 { font-size:20px; margin:0; } h2 { font-size:15px; margin:0 0 10px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); white-space:nowrap; }
+  th { color:var(--muted); font-weight:500; }
+  .mono { font-family:ui-monospace, monospace; font-size:12px; }
+  .pending { color:var(--warn); } .approved { color:var(--accent); }
+  button { padding:4px 10px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--fg); cursor:pointer; }
+  button.danger { color:var(--danger); }
+  .muted { color:var(--muted); }
+  .ev td { white-space:normal; }
+</style>
+</head>
+<body><main>
+  <div><h1>Showcase — демостенд</h1><div class="muted" id="meta"></div></div>
+  <div class="card"><h2>Устройства</h2>
+    <table><thead><tr><th>AppID</th><th>Название</th><th>Статус</th><th>Версия</th><th>Платформа</th><th>Последний запрос</th><th></th></tr></thead>
+    <tbody id="devices"></tbody></table></div>
+  <div class="card"><h2>Релизы в каталоге обновлений</h2>
+    <table><thead><tr><th>Версия</th><th>OS</th><th>Arch</th><th>Файл</th><th>Размер</th><th>SHA-256</th></tr></thead>
+    <tbody id="releases"></tbody></table></div>
+  <div class="card"><h2>События</h2>
+    <table class="ev"><thead><tr><th>Время</th><th>AppID</th><th>Событие</th></tr></thead>
+    <tbody id="events"></tbody></table></div>
+</main>
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const t = s => new Date(s).toLocaleTimeString();
+const ago = s => { const d = (Date.now() - new Date(s)) / 1000; return d < 60 ? Math.round(d) + " с назад" : Math.round(d / 60) + " мин назад"; };
+const mb = n => (n / 1048576).toFixed(2) + " МБ";
+async function act(id, what) { await fetch(`/api/admin/devices/${id}/${what}`, {method: "POST"}); load(); }
+let lastKey = "";
+async function load() {
+  const s = await (await fetch("/api/admin/state")).json();
+  document.getElementById("meta").textContent = `access TTL: ${s.access_ttl} · обновлено ${t(s.now)}`;
+  document.querySelectorAll("[data-ts]").forEach(el => el.textContent = ago(el.dataset.ts));
+  // Перерисовываем таблицы только при изменении данных, чтобы не «съедать» клики.
+  const key = JSON.stringify([s.devices.map(d => [d.app_id, d.name, d.status, d.version, d.platform]), s.releases, s.events.length && s.events[0].at]);
+  if (key === lastKey) return;
+  lastKey = key;
+  document.getElementById("devices").innerHTML = s.devices.map(d => `<tr>
+    <td class="mono">${esc(d.app_id)}</td><td>${esc(d.name) || "—"}</td>
+    <td class="${d.status}">${d.status === "approved" ? "привязано" : "ожидает QR"}</td>
+    <td>${esc(d.version)}</td><td>${esc(d.platform)}</td><td data-ts="${esc(d.last_seen)}">${ago(d.last_seen)}</td>
+    <td>${d.status === "approved"
+      ? `<button class="danger" onclick="act('${esc(d.app_id)}','revoke')">Отозвать</button>`
+      : `<button onclick="act('${esc(d.app_id)}','approve')">Привязать</button> <a href="/register?app_id=${esc(d.app_id)}">страница QR</a>`}</td></tr>`).join("")
+    || `<tr><td colspan="7" class="muted">Нет устройств — запустите клиент</td></tr>`;
+  document.getElementById("releases").innerHTML = (s.releases || []).map(r => `<tr>
+    <td>${esc(r.version)}</td><td>${esc(r.os)}</td><td>${esc(r.arch)}</td><td class="mono">${esc(r.file)}</td>
+    <td>${mb(r.size)}</td><td class="mono">${esc(r.sha256.slice(0, 16))}…</td></tr>`).join("")
+    || `<tr><td colspan="6" class="muted">Каталог пуст</td></tr>`;
+  document.getElementById("events").innerHTML = s.events.map(e => `<tr>
+    <td>${t(e.at)}</td><td class="mono">${esc((e.app_id || "").slice(0, 8))}</td><td>${esc(e.text)}</td></tr>`).join("");
+}
+load(); setInterval(load, 2000);
+</script>
+</body>
+</html>{{end}}
